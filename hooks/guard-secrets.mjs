@@ -47,7 +47,7 @@ function decide(input) {
     const command = toolInput.command;
     if (typeof command !== 'string' || !command) return null;
     // Cheap pre-check: only commands mentioning git or a secret-looking token can matter.
-    const relevant = /git/i.test(command) || command.split(/[\s"'|&;<>()]+/).some((t) => t && isSecretPath(t));
+    const relevant = /bgitb/i.test(command) || command.split(/[\s"'|&;<>()]+/).some((t) => t && isSecretPath(t));
     if (!relevant) return null;
     const { projectRoot, allow } = context();
     const gitFiles = (args) => {
