@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, copyFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
@@ -15,10 +15,18 @@ before(() => {
 });
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
-function run(input) {
+// Child environment with PATH replaced. Windows env keys are case-insensitive, so drop every PATH/Path key
+// first to avoid passing duplicates.
+function envWith(path, extra = {}) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PATH'));
+  return { ...env, PATH: path, ...extra };
+}
+
+function run(input, env) {
   const r = spawnSync(process.execPath, [script], {
     input: typeof input === 'string' ? input : JSON.stringify(input),
     encoding: 'utf8',
+    ...(env ? { env } : {}),
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -90,10 +98,21 @@ test('git commit in a non-git directory allows silently', () => {
   assertAllow(run({ tool_name: 'Bash', tool_input: { command: 'git commit -m x' }, cwd: tmp }));
 });
 
-test('internal error (tool_input missing) fails open with a warning', () => {
-  const r = run({ tool_name: 'Read', cwd: tmp });
+test('Read without tool_input allows silently', () => {
+  assertAllow(run({ tool_name: 'Read', cwd: tmp }));
+});
+
+test('internal error fails open with a [devcrew] warning', () => {
+  // Make writing the decision throw inside the hook: the hook must still exit 0, print nothing and warn.
+  const preload = join(tmp, 'broken-stdout.cjs');
+  writeFileSync(preload, "process.stdout.write = () => { throw new Error('simulated failure'); };");
+  const r = run(
+    { tool_name: 'Read', tool_input: { file_path: join(tmp, '.env') }, cwd: tmp },
+    { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+  );
   assert.equal(r.status, 0);
   assert.equal(r.stdout, '');
+  assert.match(r.stderr, /^\[devcrew\] internal error, allowing: simulated failure/);
 });
 
 // A fake `git` (a copy of node) first on PATH; NODE_OPTIONS makes it drop a marker file when launched.
@@ -110,7 +129,7 @@ function runWithGitSpy(input) {
   const r = spawnSync(process.execPath, [script], {
     input: JSON.stringify(input),
     encoding: 'utf8',
-    env: { ...process.env, PATH: bin + delimiter + process.env.PATH, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+    env: envWith(bin + delimiter + process.env.PATH, { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` }),
   });
   return { r, spawned: existsSync(marker) };
 }
@@ -129,4 +148,73 @@ test('spy sanity: a secret Read does spawn git', () => {
   const { r, spawned } = runWithGitSpy({ tool_name: 'Read', tool_input: { file_path: join(tmp, '.env') }, cwd: tmp });
   assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'ask');
   assert.equal(spawned, true);
+});
+
+// End to end in a real git repository (skipped when git is not installed).
+const hasGit = spawnSync('git', ['--version']).status === 0;
+
+function withRepo(files, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'devcrew-repo-'));
+  const g = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
+  try {
+    g('init', '-q');
+    for (const [name, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, name)), { recursive: true });
+      writeFileSync(join(dir, name), content);
+    }
+    fn(dir, g);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const bash = (command, cwd) => ({ tool_name: 'Bash', tool_input: { command }, cwd });
+
+test('e2e: staged .env and git commit -m x is denied', { skip: !hasGit }, () => {
+  withRepo({ '.env': 'DUMMY=1\n', 'a.txt': 'a\n' }, (dir, g) => {
+    g('add', '.env', 'a.txt');
+    const d = decision(run(bash('git commit -m x', dir)));
+    assert.equal(d.permissionDecision, 'deny');
+    assert.match(d.permissionDecisionReason, /\.env/);
+  });
+});
+
+test('e2e: staged secret under a non-ASCII folder is denied (git path quoting cannot hide it)', { skip: !hasGit }, () => {
+  withRepo({ 'configuración/.env': 'DUMMY=1\n' }, (dir, g) => {
+    g('add', '.');
+    const d = decision(run(bash('git commit -m x', dir)));
+    assert.equal(d.permissionDecision, 'deny');
+    assert.match(d.permissionDecisionReason, /configuración\/\.env/);
+  });
+});
+
+test('e2e: git add -A && git commit with an untracked, un-ignored .env is denied', { skip: !hasGit }, () => {
+  withRepo({ '.env': 'DUMMY=1\n', 'a.txt': 'a\n' }, (dir) => {
+    const d = decision(run(bash('git add -A && git commit -m x', dir)));
+    assert.equal(d.permissionDecision, 'deny');
+    assert.match(d.permissionDecisionReason, /\.env/);
+  });
+});
+
+test('e2e: git add . from a subfolder sees the untracked secret there', { skip: !hasGit }, () => {
+  withRepo({ 'api/.env': 'DUMMY=1\n', 'api/a.txt': 'a\n' }, (dir) => {
+    const d = decision(run(bash('git add .', join(dir, 'api'))));
+    assert.equal(d.permissionDecision, 'deny');
+    assert.match(d.permissionDecisionReason, /api\/\.env/);
+  });
+});
+
+test('e2e: git add -A && git commit with a gitignored .env is allowed', { skip: !hasGit }, () => {
+  withRepo({ '.env': 'DUMMY=1\n', '.gitignore': '.env\n', 'a.txt': 'a\n' }, (dir) => {
+    assertAllow(run(bash('git add -A && git commit -m x', dir)));
+  });
+});
+
+test('git missing from PATH: git commit -am x fails open', { skip: !hasGit }, () => {
+  withRepo({ '.env': 'DUMMY=1\n' }, (dir, g) => {
+    g('add', '.env');
+    const r = run(bash('git commit -am x', dir), envWith(''));
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, '');
+  });
 });

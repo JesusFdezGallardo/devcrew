@@ -7,7 +7,13 @@ const FILE_TOOLS = { Read: 'file_path', Edit: 'file_path', Write: 'file_path', G
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 
 function git(args, cwd) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 5000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
 }
 
 function findProjectRoot(cwd) {
@@ -50,9 +56,11 @@ function decide(input) {
     const relevant = /\bgit\b/i.test(command) || command.split(/[\s"'|&;<>()]+/).some((t) => t && isSecretPath(t));
     if (!relevant) return null;
     const { projectRoot, allow } = context();
+    // Run git where the command runs, so pathspecs such as `.` mean the same thing. Callers pass -z: NUL-separated
+    // output is never quoted, so core.quotepath cannot hide a non-ASCII path.
     const gitFiles = (args) => {
       try {
-        return git(args, projectRoot).split(/\r?\n/).filter(Boolean);
+        return git(args, cwd).split('\0').filter(Boolean);
       } catch {
         return [];
       }
@@ -64,13 +72,13 @@ function decide(input) {
   return null;
 }
 
-try {
+function main() {
   let input;
   try {
     input = JSON.parse(readFileSync(0, 'utf8'));
   } catch (err) {
     process.stderr.write(`[devcrew] could not parse hook input, allowing: ${err.message}\n`);
-    process.exit(0);
+    return;
   }
   const result = decide(input ?? {});
   if (result) {
@@ -82,7 +90,13 @@ try {
       },
     }));
   }
+}
+
+try {
+  main();
 } catch (err) {
   process.stderr.write(`[devcrew] internal error, allowing: ${err.message}\n`);
 }
-process.exit(0);
+// Set the exit code and let the process end on its own: exiting right after stdout.write could cut off the
+// decision when stdout is a pipe.
+process.exitCode = 0;
