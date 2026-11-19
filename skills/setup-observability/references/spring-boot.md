@@ -47,6 +47,9 @@ training run). Never add a default DSN value and never make a bean call Sentry a
 order**, and the order matters (a JWT inside a `Bearer` header becomes `Bearer [jwt]`; an IBAN is masked before
 the card-like rule can see its digits).
 
+The card-like rule also masks other long digit runs, such as numeric ids and epoch-millisecond timestamps. That is
+on purpose (privacy over readability): do not narrow it.
+
 ```java
 package <base-package>.observability;
 
@@ -84,8 +87,9 @@ public final class SensitiveDataMasker {
 ```
 
 `SentryMaskingConfig.java`: the Sentry starter picks up `SentryOptions.BeforeSendCallback` and
-`SentryOptions.BeforeBreadcrumbCallback` beans automatically. The first masks the event message, exception values
-and breadcrumb messages; the second masks breadcrumbs as they are recorded.
+`SentryOptions.BeforeBreadcrumbCallback` beans automatically. The first masks the event message (raw, formatted and
+its parameters), exception values, the string values of the event `extra` map, and each breadcrumb's message and
+string `data` values; the second masks breadcrumbs the same way as they are recorded.
 
 ```java
 package <base-package>.observability;
@@ -96,6 +100,8 @@ import io.sentry.SentryEvent;
 import io.sentry.SentryOptions;
 import io.sentry.protocol.Message;
 import io.sentry.protocol.SentryException;
+import java.util.List;
+import java.util.Map;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -110,15 +116,20 @@ public class SentryMaskingConfig {
             if (message != null) {
                 message.setMessage(SensitiveDataMasker.mask(message.getMessage()));
                 message.setFormatted(SensitiveDataMasker.mask(message.getFormatted()));
+                List<String> params = message.getParams();
+                if (params != null) {
+                    message.setParams(params.stream().map(SensitiveDataMasker::mask).toList());
+                }
             }
             if (event.getExceptions() != null) {
                 for (SentryException exception : event.getExceptions()) {
                     exception.setValue(SensitiveDataMasker.mask(exception.getValue()));
                 }
             }
+            maskStringValues(event.getExtras());
             if (event.getBreadcrumbs() != null) {
                 for (Breadcrumb breadcrumb : event.getBreadcrumbs()) {
-                    breadcrumb.setMessage(SensitiveDataMasker.mask(breadcrumb.getMessage()));
+                    maskBreadcrumb(breadcrumb);
                 }
             }
             return event;
@@ -128,9 +139,21 @@ public class SentryMaskingConfig {
     @Bean
     public SentryOptions.BeforeBreadcrumbCallback sentryBeforeBreadcrumb() {
         return (Breadcrumb breadcrumb, Hint hint) -> {
-            breadcrumb.setMessage(SensitiveDataMasker.mask(breadcrumb.getMessage()));
+            maskBreadcrumb(breadcrumb);
             return breadcrumb;
         };
+    }
+
+    private static void maskBreadcrumb(Breadcrumb breadcrumb) {
+        breadcrumb.setMessage(SensitiveDataMasker.mask(breadcrumb.getMessage()));
+        maskStringValues(breadcrumb.getData());
+    }
+
+    /** Masks the String values of a map in place; other values are left as they are. */
+    private static void maskStringValues(Map<String, Object> values) {
+        if (values != null) {
+            values.replaceAll((key, value) -> value instanceof String text ? SensitiveDataMasker.mask(text) : value);
+        }
     }
 }
 ```
@@ -143,7 +166,7 @@ If the project already defines its own `BeforeSendCallback` bean, do not add a s
 Put them under `src/test/java/<base-package path>/observability/`. Adapt to the project's existing test style
 (assertion library, naming) when it differs. The `SentryMaskingConfigTest` is a `@SpringBootTest`; if the project
 tests need a database or other infrastructure for a full context, use a plain unit test that builds
-`new SentryMaskingConfig().sentryBeforeSend()` instead and keep the disabled-SDK assertion only where the context
+`new SentryMaskingConfig().sentryBeforeSend()` (and `sentryBeforeBreadcrumb()`) instead and keep the disabled-SDK assertion only where the context
 can start.
 
 `SensitiveDataMaskerTest.java`:
@@ -190,8 +213,9 @@ class SensitiveDataMaskerTest {
 
     @Test
     void ibanRuleRunsBeforeCardRule() {
-        // The long digit run inside the IBAN must not be reported as a card-like number.
-        assertEquals("[iban]", SensitiveDataMasker.mask("ES9121000418450200051332"));
+        // The spaced digit groups of this IBAN also match the card rule: in the wrong order the result
+        // would be "DE89 [number]".
+        assertEquals("[iban]", SensitiveDataMasker.mask("DE89 3704 0044 0532 0130 00"));
     }
 
     @Test
@@ -241,6 +265,9 @@ class SentryMaskingConfigTest {
     @Autowired
     SentryOptions.BeforeSendCallback beforeSend;
 
+    @Autowired
+    SentryOptions.BeforeBreadcrumbCallback beforeBreadcrumb;
+
     @Test
     void sdkIsDisabledWithEmptyDsn() {
         assertFalse(Sentry.isEnabled());
@@ -266,6 +293,42 @@ class SentryMaskingConfigTest {
         assertEquals("login failed for [email]", result.getMessage().getMessage());
         assertEquals("bad iban [iban]", result.getExceptions().get(0).getValue());
         assertEquals("card [number]", result.getBreadcrumbs().get(0).getMessage());
+    }
+
+    @Test
+    void beforeSendMasksMessageParamsExtrasAndBreadcrumbData() {
+        SentryEvent event = new SentryEvent();
+        Message message = new Message();
+        message.setMessage("login failed for {}");
+        message.setFormatted("login failed for jane@example.com");
+        message.setParams(List.of("jane@example.com"));
+        event.setMessage(message);
+        event.setExtra("account", "DE89 3704 0044 0532 0130 00");
+        event.setExtra("attempts", 3);
+
+        Breadcrumb breadcrumb = new Breadcrumb();
+        breadcrumb.setData("url", "/users?email=jane@example.com");
+        event.addBreadcrumb(breadcrumb);
+
+        SentryEvent result = beforeSend.execute(event, new Hint());
+
+        assertEquals("login failed for [email]", result.getMessage().getFormatted());
+        assertEquals(List.of("[email]"), result.getMessage().getParams());
+        assertEquals("[iban]", result.getExtra("account"));
+        assertEquals(3, result.getExtra("attempts"));
+        assertEquals("/users?email=[email]", result.getBreadcrumbs().get(0).getData("url"));
+    }
+
+    @Test
+    void beforeBreadcrumbMasksMessageAndData() {
+        Breadcrumb breadcrumb = new Breadcrumb();
+        breadcrumb.setMessage("Authorization: Bearer abc123");
+        breadcrumb.setData("to", "jane@example.com");
+
+        Breadcrumb result = beforeBreadcrumb.execute(breadcrumb, new Hint());
+
+        assertEquals("Authorization: Bearer [token]", result.getMessage());
+        assertEquals("[email]", result.getData("to"));
     }
 }
 ```

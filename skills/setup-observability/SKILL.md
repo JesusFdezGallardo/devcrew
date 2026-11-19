@@ -53,14 +53,15 @@ Follow it, with these points:
   version exists (Maven Central for `io.sentry:sentry-spring-boot-starter-jakarta`, npm for `@sentry/react` and
   `@sentry/vite-plugin`) and use it only if the code in the reference still compiles; otherwise keep the verified
   version.
-- **Masking rules** are identical in both stacks and run in this order on messages, exception values and
-  breadcrumb messages: JWT, then `Bearer` token, then email, then IBAN, then card-like digit runs. Copy the
-  regexes verbatim.
+- **Masking rules** are identical in both stacks and run in this order on messages (and Spring's message
+  parameters), exception values, string values of the event `extra`, and breadcrumb messages and string `data`
+  values: JWT, then `Bearer` token, then email, then IBAN, then card-like digit runs. Copy the regexes verbatim.
 - **Tests:** add the masking tests in the project's test style (framework, folder, naming). They must cover each
   rule and the order. Run the project's test command and the build afterwards, with no DSN set, and report the
   result. If a command cannot run here, say so.
 - **Release wiring in the repo:** Spring: `ARG SENTRY_RELEASE` in the Dockerfile runtime stage, turned into an
-  env var; React: release from `VITE_SENTRY_RELEASE`, source maps uploaded only when `SENTRY_AUTH_TOKEN` is set.
+  env var; React: release from `VITE_SENTRY_RELEASE`, falling back to `VITE_VERCEL_GIT_COMMIT_SHA` (exposed by
+  Vercel to Vite builds), source maps uploaded only when `SENTRY_AUTH_TOKEN` is set.
   In GitHub Actions pass `${{ github.sha }}` as the release, and only extend a workflow that already builds the
   project. Never create a workflow.
 
@@ -112,8 +113,10 @@ List these at the end, adapted to the stacks found. They need the user's account
    (production) on Cloud Run; `VITE_SENTRY_DSN` and `VITE_SENTRY_ENVIRONMENT` on Vercel (or the frontend
    host). The DSN is not a secret in the browser, but keep it out of the repo.
 4. Release identifier: make the platform pass the commit SHA. Cloud Run with Cloud Build: pass the commit SHA
-   substitution as `--build-arg SENTRY_RELEASE=...` in the build step. Vercel: set `VITE_SENTRY_RELEASE` to
-   the system variable `VERCEL_GIT_COMMIT_SHA`. Without it the investigator falls back to `HEAD`.
+   substitution as `--build-arg SENTRY_RELEASE=...` in the build step. Vercel: nothing to map; Vite builds get
+   `VITE_VERCEL_GIT_COMMIT_SHA`, which the app and the plugin use when `VITE_SENTRY_RELEASE` is empty (keep the
+   project setting that exposes system environment variables on). Without a release the investigator falls back
+   to `HEAD`.
 5. Source maps (React): create an organization auth token with release and source map upload scope and store it
    **only as the CI secret `SENTRY_AUTH_TOKEN`** (GitHub Actions secret), plus `SENTRY_ORG` / `SENTRY_PROJECT`.
 6. Connect the Sentry MCP for the investigator agent: run `/mcp` in Claude Code, choose `sentry`, authenticate.

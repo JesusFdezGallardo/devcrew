@@ -16,8 +16,15 @@ Skip `vitest` if the project already has a test runner; then write the test in t
 
 ## 2. Masking function
 
-`src/sentry/maskSensitive.ts`: a pure function. The five rules run **in this order**, and the order matters (a JWT
+`src/sentry/maskSensitive.ts`: pure functions. The five rules run **in this order**, and the order matters (a JWT
 inside a `Bearer` header becomes `Bearer [jwt]`; an IBAN is masked before the card-like rule can see its digits).
+
+The card-like rule also masks other long digit runs, such as numeric ids and epoch-millisecond timestamps. That is
+on purpose (privacy over readability): do not narrow it.
+
+`maskEvent` and `maskBreadcrumb` apply the rules to everything free-form an event carries: the message, exception
+values, the string values of `event.extra`, and each breadcrumb's message and string `data` values. Their parameter
+types are structural, so they accept the SDK's event and breadcrumb types without importing them.
 
 ```ts
 // Masks personal data in free text before it leaves the browser for Sentry.
@@ -34,6 +41,38 @@ export function maskSensitive(text: string): string {
   if (!text) return text
   return RULES.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), text)
 }
+
+type MaskableBreadcrumb = { message?: string; data?: Record<string, unknown> }
+type MaskableEvent = {
+  message?: string
+  exception?: { values?: Array<{ value?: string }> }
+  extra?: Record<string, unknown>
+  breadcrumbs?: MaskableBreadcrumb[]
+}
+
+// Masks the string values of an object in place; other values are left as they are.
+function maskStringValues(values: Record<string, unknown> | undefined): void {
+  if (!values) return
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value === 'string') values[key] = maskSensitive(value)
+  }
+}
+
+export function maskBreadcrumb<T extends MaskableBreadcrumb>(breadcrumb: T): T {
+  if (breadcrumb.message) breadcrumb.message = maskSensitive(breadcrumb.message)
+  maskStringValues(breadcrumb.data)
+  return breadcrumb
+}
+
+export function maskEvent<T extends MaskableEvent>(event: T): T {
+  if (event.message) event.message = maskSensitive(event.message)
+  event.exception?.values?.forEach((exception) => {
+    if (exception.value) exception.value = maskSensitive(exception.value)
+  })
+  maskStringValues(event.extra)
+  event.breadcrumbs?.forEach(maskBreadcrumb)
+  return event
+}
 ```
 
 ## 3. Init
@@ -44,13 +83,14 @@ development, tests or builds without network. The data region (EU) is decided by
 
 ```ts
 import * as Sentry from '@sentry/react'
-import { maskSensitive } from './maskSensitive'
+import { maskBreadcrumb, maskEvent } from './maskSensitive'
 
 export function initSentry(): void {
   Sentry.init({
     dsn: import.meta.env.VITE_SENTRY_DSN || undefined,
     environment: import.meta.env.VITE_SENTRY_ENVIRONMENT || import.meta.env.MODE,
-    release: import.meta.env.VITE_SENTRY_RELEASE || undefined,
+    // VITE_VERCEL_GIT_COMMIT_SHA is exposed to Vite builds by Vercel; elsewhere CI sets VITE_SENTRY_RELEASE.
+    release: import.meta.env.VITE_SENTRY_RELEASE || import.meta.env.VITE_VERCEL_GIT_COMMIT_SHA || undefined,
     // @sentry/react 11 replaced sendDefaultPii with dataCollection. Everything personal stays off.
     dataCollection: {
       userInfo: false,
@@ -60,20 +100,8 @@ export function initSentry(): void {
       urlQueryParams: false,
     },
     tracesSampleRate: 0.1,
-    beforeSend(event) {
-      if (event.message) event.message = maskSensitive(event.message)
-      event.exception?.values?.forEach((exception) => {
-        if (exception.value) exception.value = maskSensitive(exception.value)
-      })
-      event.breadcrumbs?.forEach((breadcrumb) => {
-        if (breadcrumb.message) breadcrumb.message = maskSensitive(breadcrumb.message)
-      })
-      return event
-    },
-    beforeBreadcrumb(breadcrumb) {
-      if (breadcrumb.message) breadcrumb.message = maskSensitive(breadcrumb.message)
-      return breadcrumb
-    },
+    beforeSend: (event) => maskEvent(event),
+    beforeBreadcrumb: (breadcrumb) => maskBreadcrumb(breadcrumb),
   })
 }
 ```
@@ -132,7 +160,7 @@ const uploadSourceMaps = Boolean(process.env.SENTRY_AUTH_TOKEN)
 //             authToken: process.env.SENTRY_AUTH_TOKEN,
 //             // EU data region. Override with SENTRY_URL for another region.
 //             url: process.env.SENTRY_URL ?? 'https://de.sentry.io',
-//             release: { name: process.env.VITE_SENTRY_RELEASE },
+//             release: { name: process.env.VITE_SENTRY_RELEASE || process.env.VITE_VERCEL_GIT_COMMIT_SHA },
 //             sourcemaps: { filesToDeleteAfterUpload: ['./dist/**/*.map'] },
 //             telemetry: false,
 //           }),
@@ -145,8 +173,9 @@ const uploadSourceMaps = Boolean(process.env.SENTRY_AUTH_TOKEN)
 //   },
 ```
 
-The release is read from `VITE_SENTRY_RELEASE` both by the app (`initSentry`) and by the plugin, so the uploaded
-maps and the runtime events carry the same release. If the config already sets `build.sourcemap`, keep the
+The release is read from `VITE_SENTRY_RELEASE`, falling back to `VITE_VERCEL_GIT_COMMIT_SHA` (which Vercel exposes
+to Vite builds), both by the app (`initSentry`) and by the plugin, so the uploaded maps and the runtime events carry
+the same release. On Vercel nothing has to be mapped by hand. If the config already sets `build.sourcemap`, keep the
 existing value when the token is absent.
 
 GitHub Actions (only if a workflow already builds the frontend): add the release and the secret to the build step
@@ -168,7 +197,7 @@ If the secret does not exist, the variable is empty, `uploadSourceMaps` is false
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { maskSensitive } from './maskSensitive'
+import { maskBreadcrumb, maskEvent, maskSensitive } from './maskSensitive'
 
 const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl'
 
@@ -196,8 +225,9 @@ describe('maskSensitive', () => {
   })
 
   it('runs the IBAN rule before the card rule', () => {
-    // The long digit run inside the IBAN must not be reported as a card-like number.
-    expect(maskSensitive('ES9121000418450200051332')).toBe('[iban]')
+    // The spaced digit groups of this IBAN also match the card rule: in the wrong order the result
+    // would be 'DE89 [number]'.
+    expect(maskSensitive('DE89 3704 0044 0532 0130 00')).toBe('[iban]')
   })
 
   it('masks card-like numbers', () => {
@@ -216,6 +246,31 @@ describe('maskSensitive', () => {
 
   it('handles an empty string', () => {
     expect(maskSensitive('')).toBe('')
+  })
+})
+
+describe('maskEvent and maskBreadcrumb', () => {
+  it('masks the message, exception values, extra strings and breadcrumbs of an event', () => {
+    const event = maskEvent({
+      message: 'login failed for jane@example.com',
+      exception: { values: [{ value: 'bad iban ES9121000418450200051332' }] },
+      extra: { account: 'DE89 3704 0044 0532 0130 00', attempts: 3 },
+      breadcrumbs: [{ message: 'card 4111 1111 1111 1111', data: { url: '/users?email=jane@example.com', status: 200 } }],
+    })
+    expect(event.message).toBe('login failed for [email]')
+    expect(event.exception?.values?.[0].value).toBe('bad iban [iban]')
+    expect(event.extra).toEqual({ account: '[iban]', attempts: 3 })
+    expect(event.breadcrumbs?.[0]).toEqual({ message: 'card [number]', data: { url: '/users?email=[email]', status: 200 } })
+  })
+
+  it('masks a breadcrumb message and its string data values', () => {
+    const breadcrumb = maskBreadcrumb({ message: 'Authorization: Bearer abc123', data: { to: 'jane@example.com', n: 1 } })
+    expect(breadcrumb).toEqual({ message: 'Authorization: Bearer [token]', data: { to: '[email]', n: 1 } })
+  })
+
+  it('accepts events without optional parts', () => {
+    expect(maskEvent({})).toEqual({})
+    expect(maskBreadcrumb({})).toEqual({})
   })
 })
 ```
