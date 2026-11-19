@@ -45,8 +45,8 @@ Field names are a contract read by the production-investigator agent: keep them 
 ```markdown
 ## Production
 
-- Platform: <Cloud Run | Vercel | other> — service name, region, project id (if any)
-- Error tracking: Sentry — org `<org-slug>`, project `<project-slug>`, region EU
+- Platform: <Cloud Run | Vercel | other> â€” service name, region, project id (if any)
+- Error tracking: Sentry â€” org `<org-slug>`, project `<project-slug>`, region EU
 - Release identifier: git commit SHA
 - Logs fallback: `<gcloud logging read ... | vercel logs ...>`
 
