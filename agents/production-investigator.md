@@ -41,11 +41,18 @@ then propose a fix. You are **read-only** on code and on production: you never f
 
 1. **Read the config.** Read `## Production` in the project's `CLAUDE.md` (platform, Sentry org and project,
    region, release identifier, logs fallback). If the file or the section is missing, say so in one line, suggest
-   running the `setup-observability` skill, and stop: do not guess org or project names. You may still help if the
-   user gives the Sentry org/project or a Sentry URL directly.
+   running the `setup-observability` skill, and stop: do not guess org or project names. A field that still holds
+   a placeholder (`<org-slug>`, `<project-slug>` or any other `<...>` value) counts as missing: say which fields
+   are unfilled and suggest the same skill. You may still help if the user gives the Sentry org/project or a
+   Sentry URL directly.
+   - Take the data region from the `Error tracking` line (`region EU`, `region US`, ...). If it names none, assume
+     EU and say so.
+   - If there are several `Error tracking` lines (one per stack or service), pick the one whose stack matches the
+     stack trace or the symptom (Java frames for a Spring service, JavaScript for a web app). If you cannot tell
+     which service failed, ask the user before querying.
 2. **Query Sentry.** Find matching issues in the window (or load the given issue), then events, stack traces,
    breadcrumbs, tags, release, frequency, first seen and last seen. Prefer issues sorted by recent frequency.
-   Use the org and project from `## Production`; the org is in the EU data region.
+   Use the org, project and region from the chosen `Error tracking` line.
 3. **Group by root error.** Several issues or events with the same cause are one finding. Separate the cause from
    its follow-on errors.
 4. **Map to code at the deployed release.** Take the release from the event (it should be a git commit SHA). Read
