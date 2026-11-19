@@ -88,7 +88,7 @@ For each target, check whether it exists first.
 
 | Target | Source | If it does not exist | If it exists |
 |---|---|---|---|
-| `CLAUDE.md` | template + inlined sections | create it | append only the `##` sections whose heading is missing (compare headings, case-insensitive); keep existing ones untouched |
+| `CLAUDE.md` | template + inlined sections | create it | append only the `##` sections that are missing (see "Matching CLAUDE.md sections" below); keep existing ones untouched |
 | changelog file | `changelog-en.md` or `changelog-es.md` | create it with the first entry | leave it as is; if it lacks an entry for this setup, say so, do not add |
 | `.gitignore` | inlined block | create it with the block | if the line `# devcrew: secrets` exists, add only the block lines missing from it; otherwise append the whole block after a blank line |
 | `.env.example` | generated | create it | append only variable names not already present |
@@ -96,6 +96,21 @@ For each target, check whether it exists first.
 
 Details:
 
+- **Matching CLAUDE.md sections**: a template section counts as present when an existing `##` heading means the
+  same thing, not only when the text is identical. Compare case-insensitively and ignore filler words such as
+  "project", "the" or "notes". Treat these as equivalent:
+
+  | Template section | Also counts as present |
+  |---|---|
+  | Overview | Project overview, About, Introduction |
+  | Commands | Scripts, Development commands, Common commands |
+  | Architecture | Design, Structure, Project structure |
+  | Data model notes | Data model, Database, Schema |
+
+  If a heading might be the same section but you are not sure (for example `## Setup` for Commands), ask the
+  user whether it counts instead of appending a near-duplicate. `## Production` and `## devcrew` are a contract
+  read by agents: they count as present only under exactly these headings (case-insensitive). If a similar
+  section exists (for example `## Deployment`), still add `## Production` and tell the user.
 - **`.env.example`**: generate names only, no values, from what you learned: e.g. `PORT=`, `DATABASE_URL=`
   for a service with a database, `SENTRY_DSN=` and `SENTRY_ENVIRONMENT=` if observability is planned, plus
   names typical of the stack or deploy platform. One `NAME=` per line, with a short `#` comment header.
