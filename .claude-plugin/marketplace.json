@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "devcrew",
+  "description": "Claude Code plugin marketplace for devcrew: security review, production investigation and workflow guardrails.",
+  "owner": {
+    "name": "Jesús Fdez-Gallardo"
+  },
+  "plugins": [
+    {
+      "name": "devcrew",
+      "description": "Security reviewer, production investigator and guardrails for the superpowers workflow, for Claude Code.",
+      "category": "development",
+      "source": "./"
+    }
+  ]
+}

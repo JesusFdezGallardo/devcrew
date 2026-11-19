@@ -1,0 +1,20 @@
+{
+  "name": "devcrew",
+  "version": "0.1.0",
+  "description": "Security reviewer, production investigator and guardrails for the superpowers workflow, for Claude Code.",
+  "author": {
+    "name": "Jesús Fdez-Gallardo"
+  },
+  "repository": "https://github.com/JesusFdezGallardo/devcrew",
+  "homepage": "https://github.com/JesusFdezGallardo/devcrew",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "review",
+    "production",
+    "investigation",
+    "guardrails",
+    "hooks",
+    "superpowers"
+  ]
+}
