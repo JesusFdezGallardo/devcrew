@@ -1,9 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, copyFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'guard-secrets.mjs');
@@ -94,4 +94,39 @@ test('internal error (tool_input missing) fails open with a warning', () => {
   const r = run({ tool_name: 'Read', cwd: tmp });
   assert.equal(r.status, 0);
   assert.equal(r.stdout, '');
+});
+
+// A fake `git` (a copy of node) first on PATH; NODE_OPTIONS makes it drop a marker file when launched.
+function runWithGitSpy(input) {
+  const bin = join(tmp, 'spy-bin');
+  const marker = join(tmp, 'git-called');
+  const exe = process.platform === 'win32' ? 'git.exe' : 'git';
+  mkdirSync(bin, { recursive: true });
+  copyFileSync(process.execPath, join(bin, exe));
+  chmodSync(join(bin, exe), 0o755);
+  const preload = join(tmp, 'spy.cjs');
+  writeFileSync(preload, `if (/^git(\.exe)?$/i.test(require('path').basename(process.execPath))) require('fs').writeFileSync(${JSON.stringify(marker)}, 'x');`);
+  rmSync(marker, { force: true });
+  const r = spawnSync(process.execPath, [script], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    env: { ...process.env, PATH: bin + delimiter + process.env.PATH, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+  });
+  return { r, spawned: existsSync(marker) };
+}
+
+test('fast path: ordinary Read and Bash do not spawn git', () => {
+  const read = runWithGitSpy({ tool_name: 'Read', tool_input: { file_path: join(tmp, 'src', 'app.ts') }, cwd: tmp });
+  assert.equal(read.r.status, 0);
+  assert.equal(read.r.stdout, '');
+  assert.equal(read.spawned, false);
+  const bash = runWithGitSpy({ tool_name: 'Bash', tool_input: { command: 'ls -la' }, cwd: tmp });
+  assert.equal(bash.r.stdout, '');
+  assert.equal(bash.spawned, false);
+});
+
+test('spy sanity: a secret Read does spawn git', () => {
+  const { r, spawned } = runWithGitSpy({ tool_name: 'Read', tool_input: { file_path: join(tmp, '.env') }, cwd: tmp });
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'ask');
+  assert.equal(spawned, true);
 });
