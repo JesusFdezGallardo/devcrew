@@ -21,7 +21,20 @@ A template freezes a copy in every repository: fixes have to be copied by hand a
 /plugin install devcrew@devcrew
 ```
 
-Restart Claude Code, then run `/skills` to confirm `devcrew:init-project`, `devcrew:ship` and `devcrew:mcp-check` are listed. If the repository is private, install it with the GitHub credentials of the user who owns it.
+Restart Claude Code, then run `/skills` to confirm `devcrew:init-project`, `devcrew:ship` and `devcrew:mcp-check` are listed. The marketplace is public, so no special credentials are needed to install it.
+
+## Use it in an existing project
+
+Install once at user scope. Then, in each project:
+
+```text
+/devcrew:init-project     # merge a thin CLAUDE.md and conventions; never overwrites, never commits
+/mcp                      # authenticate the sentry server once with OAuth; no token in the repo
+/devcrew:mcp-check        # confirm the MCP connections before relying on them
+/devcrew:ship             # run before committing or pushing; never commits or pushes
+```
+
+`init-project` asks a few questions with defaults. If the project already has a `CLAUDE.md` or a changelog, it only adds what is missing and shows the exact lines first. `ship` exits non-zero on a blocking finding; a secret-like file that is already tracked needs a human decision (allowlist it in `.devcrew.json` if it is a template, or remove and rotate it if it holds real values).
 
 ## What is inside
 

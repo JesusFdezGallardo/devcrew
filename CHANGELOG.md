@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Portfolio README: install commands, component guide, configuration, validation flow and sanitized illustrative reports.
+- Per-project quick start in the README: `init-project`, `/mcp`, `mcp-check` and `ship`.
 - `devcrew:ship` skill and `scripts/ship-check.mjs`: pre-push validation of secret-like files, `CLAUDE.md`, changelog and declared npm scripts, with masked output and `--json` for CI.
 - `init-project` now asks new projects to run `devcrew:ship` before committing or pushing.
 - `devcrew:mcp-check` skill and `scripts/mcp-check.mjs`: headless MCP health check (stdio `initialize` + `tools/list` handshake for local servers, HTTP probe for remote ones) with MCP Inspector guidance for interactive debugging.
