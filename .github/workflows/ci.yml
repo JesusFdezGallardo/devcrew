@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # The plugin has no runtime or dev dependencies; hooks and scripts are
+      # Node ESM with only built-in modules.
+      - name: Unit tests
+        run: npm test
+
+      - name: Pre-push gate (scripts already run above)
+        run: node scripts/ship-check.mjs --no-scripts
+
+      - name: MCP connections
+        run: node scripts/mcp-check.mjs
+
+      # Best effort: the Claude Code CLI is not guaranteed on a runner.
+      - name: Plugin manifest
+        continue-on-error: true
+        run: |
+          if command -v claude >/dev/null 2>&1; then
+            claude plugin validate .
+          else
+            echo "claude CLI not available; manifest validation skipped"
+          fi
