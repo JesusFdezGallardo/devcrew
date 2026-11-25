@@ -16,3 +16,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Align the declared Node engine with the supported CI matrix and README (>=20).
+- Use `node --test` without glob arguments so the test suite also runs on Node 20; globs in the test runner are only supported from Node 22.
