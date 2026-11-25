@@ -53,6 +53,7 @@ Field names are a contract read by the production-investigator agent: keep them 
 ## devcrew
 
 - At superpowers' final review, run the `devcrew:security-reviewer` agent on the change set.
+- Before committing or pushing, run `devcrew:ship` to validate secrets, docs, scripts and MCP connections.
 - Log each change set in `{{CHANGELOG_FILE}}`, naming any secrets touched (names only, never values).
 - Never commit secrets; use `.env` locally and keep `.env.example` names-only.
 ```

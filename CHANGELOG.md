@@ -8,3 +8,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Portfolio README: install commands, component guide, configuration, validation flow and sanitized illustrative reports.
+- `devcrew:ship` skill and `scripts/ship-check.mjs`: pre-push validation of secret-like files, `CLAUDE.md`, changelog and declared npm scripts, with masked output and `--json` for CI.
+- `init-project` now asks new projects to run `devcrew:ship` before committing or pushing.
